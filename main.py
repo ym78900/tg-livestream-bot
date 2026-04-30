@@ -64,6 +64,7 @@ async def get_youtube_url() -> str:
         "yt-dlp", "-g",
         "-f", "bestvideo[vcodec^=avc1]+bestaudio/best",
         "--no-warnings",
+        "--extractor-args", "youtube:player_client=ios",
         YT_URL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

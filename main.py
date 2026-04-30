@@ -60,8 +60,9 @@ async def get_or_create_rtmp(user, peer) -> tuple[str, str]:
 async def get_youtube_url() -> str:
     """Use yt-dlp to extract the best video+audio HLS URL."""
     print(f"[yt-dlp] Extracting stream URL from {YT_URL} ...")
+    ytdlp = os.path.join(os.path.dirname(os.sys.executable), "yt-dlp")
     proc = await asyncio.create_subprocess_exec(
-        "yt-dlp", "-g",
+        ytdlp, "-g",
         "-f", "bestvideo[vcodec^=avc1]+bestaudio/best",
         "--no-warnings",
         "--extractor-args", "youtube:player_client=ios",

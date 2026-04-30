@@ -57,81 +57,69 @@ async def get_or_create_rtmp(user, peer) -> tuple[str, str]:
     return result.url, result.key
 
 
-async def get_youtube_url() -> str:
-    """Use yt-dlp to extract the best video+audio HLS URL."""
-    print(f"[yt-dlp] Extracting stream URL from {YT_URL} ...")
-    ytdlp = os.path.join(os.path.dirname(os.sys.executable), "yt-dlp")
-    proc = await asyncio.create_subprocess_exec(
-        ytdlp, "-g",
-        "-f", "bestvideo[vcodec^=avc1]+bestaudio/best",
-        "--no-warnings",
-        "--cookies", os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt"),
-        YT_URL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-    lines = stdout.decode().strip().split("\n")
-    if not lines or not lines[0]:
-        raise RuntimeError(f"yt-dlp returned no URL: {stderr.decode()}")
-    url = lines[0]
-    print(f"[yt-dlp] Got HLS URL (truncated): {url[:80]}...")
-    return url
-
-
-def start_ffmpeg(src_url: str, rtmp_url: str, stream_key: str):
-    """Launch ffmpeg to pull from YouTube HLS and push to Telegram RTMP."""
+def start_ffmpeg(rtmp_url: str, stream_key: str):
+    """Launch yt-dlp (native downloader) piped into ffmpeg → Telegram RTMP."""
     global ffmpeg_proc
     dest = f"{rtmp_url}{stream_key}"
-    cmd = [
+    ytdlp = os.path.join(os.path.dirname(os.sys.executable), "yt-dlp")
+    cookies = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+
+    ytdlp_cmd = [
+        ytdlp,
+        "-f", "96",                    # single combined HLS stream, no merging
+        "--downloader", "native",       # Python downloader — solves n-challenge per segment
+        "--no-warnings",
+        "--cookies", cookies,
+        "-o", "-",                      # pipe raw TS bytes to stdout
+        YT_URL,
+    ]
+    ffmpeg_cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "warning",
         "-fflags", "nobuffer",
         "-flags", "low_delay",
-        "-reconnect", "1",
-        "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "5",
-        "-live_start_index", "0",
-        "-i", src_url,
+        "-i", "pipe:0",
         "-copyts", "-start_at_zero",
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-tune", "zerolatency",
         "-profile:v", "baseline",
         "-level", "3.1",
-        "-b:v", "10k",
-        "-maxrate", "10k",
-        "-bufsize", "5k",
-        "-r", "1",
-        "-g", "1",
+        "-b:v", "10k", "-maxrate", "10k", "-bufsize", "5k",
+        "-r", "1", "-g", "1",
         "-s", "128x72",
         "-vf", "geq=0:128:128",
-        "-c:a", "aac",
-        "-b:a", "64k",
-        "-ar", "44100",
-        "-ac", "2",
-        "-f", "flv",
-        dest,
+        "-c:a", "aac", "-b:a", "64k", "-ar", "44100", "-ac", "2",
+        "-f", "flv", dest,
     ]
-    print(f"[ffmpeg] Starting push to Telegram RTMP...")
-    ffmpeg_proc = subprocess.Popen(cmd)
-    return ffmpeg_proc
+
+    print("[yt-dlp] Starting native HLS download pipe...")
+    ytdlp_proc = subprocess.Popen(ytdlp_cmd, stdout=subprocess.PIPE)
+    print("[ffmpeg] Starting push to Telegram RTMP...")
+    ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=ytdlp_proc.stdout)
+    ytdlp_proc.stdout.close()
+    return ytdlp_proc, ffmpeg_proc
 
 
 async def stream_loop(user, peer):
     global ffmpeg_proc
     while True:
+        ytdlp_proc = None
         try:
             rtmp_url, stream_key = await get_or_create_rtmp(user, peer)
-            src_url = await get_youtube_url()
-            proc = start_ffmpeg(src_url, rtmp_url, stream_key)
+            ytdlp_proc, ffmpeg_proc = start_ffmpeg(rtmp_url, stream_key)
             print("[stream] Stream is live. Watching ffmpeg process...")
-            while proc.poll() is None:
+            while ffmpeg_proc.poll() is None:
                 await asyncio.sleep(5)
-            print(f"[stream] ffmpeg exited (code {proc.returncode}). Restarting in 5s...")
+            print(f"[stream] ffmpeg exited (code {ffmpeg_proc.returncode}). Restarting in 5s...")
         except Exception as e:
             print(f"[stream] Error: {e}. Retrying in 10s...")
             await asyncio.sleep(10)
             continue
+        finally:
+            if ytdlp_proc and ytdlp_proc.poll() is None:
+                ytdlp_proc.terminate()
+            if ffmpeg_proc and ffmpeg_proc.poll() is None:
+                ffmpeg_proc.terminate()
         await asyncio.sleep(5)
 
 

@@ -28,12 +28,14 @@ async def ensure_voice_chat(user, peer):
 
     if existing_call:
         print("[call] Voice chat already exists, reusing.")
-        # Ensure new participants are muted
-        await user.invoke(ToggleGroupCallSettings(
-            call=existing_call,
-            reset_invite_hash=False,
-            join_muted=True,
-        ))
+        try:
+            await user.invoke(ToggleGroupCallSettings(
+                call=existing_call,
+                reset_invite_hash=False,
+                join_muted=True,
+            ))
+        except Exception:
+            pass  # already muted or not modified
         return
 
     print("[call] Creating voice chat...")

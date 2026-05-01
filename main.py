@@ -28,8 +28,9 @@ ffmpeg_proc: subprocess.Popen = None
 
 def create_pipes():
     for pipe in (AUDIO_PIPE, VIDEO_PIPE):
-        if not os.path.exists(pipe):
-            os.mkfifo(pipe)
+        if os.path.exists(pipe):
+            os.remove(pipe)
+        os.mkfifo(pipe)
 
 
 def start_ffmpeg():

@@ -46,6 +46,7 @@ async def ensure_voice_chat(user, peer):
             call=chat.full_chat.call,
             reset_invite_hash=False,
             join_muted=True,
+            hidden_listeners=True,
         ))
     except Exception:
         pass

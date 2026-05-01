@@ -62,7 +62,7 @@ async def stream_loop(user, tgcalls):
             await ensure_voice_chat(user, peer)
 
             print("[stream] Joining voice chat with audio stream...")
-            await tgcalls.join_group_call(
+            await tgcalls.play(
                 CHANNEL_ID,
                 MediaStream(
                     AUDIO_URL,
@@ -74,7 +74,7 @@ async def stream_loop(user, tgcalls):
             print("[stream] Streaming. Waiting for stream to end...")
 
             # Wait until the stream ends or errors
-            while await tgcalls.get_call(CHANNEL_ID) is not None:
+            while CHANNEL_ID in [c for c in await tgcalls.calls]:
                 await asyncio.sleep(10)
 
             print("[stream] Stream ended. Restarting in 5s...")
@@ -82,7 +82,7 @@ async def stream_loop(user, tgcalls):
         except Exception as e:
             print(f"[stream] Error: {e}. Retrying in 10s...")
             try:
-                await tgcalls.leave_group_call(CHANNEL_ID)
+                await tgcalls.leave_call(CHANNEL_ID)
             except Exception:
                 pass
 

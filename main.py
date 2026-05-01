@@ -70,6 +70,8 @@ def start_ffmpeg(rtmp_url: str, stream_key: str):
         "-analyzeduration", "3000000",
         "-probesize", "5000000",
         "-re",
+        "-rtbufsize", "30M",
+        "-max_delay", "30000000",
         "-fflags", "+genpts",
         "-i", hls_url,
         # video: re-encode at 200kbps 240p to fix timestamps

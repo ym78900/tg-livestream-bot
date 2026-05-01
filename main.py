@@ -6,7 +6,7 @@ from hydrogram.raw.functions.phone import CreateGroupCall, DiscardGroupCall, Tog
 from hydrogram.raw.functions.channels import GetFullChannel
 from hydrogram.raw.types import InputGroupCall
 from pytgcalls import PyTgCalls
-from pytgcalls.types import MediaStream, AudioQuality, GroupCallConfig
+from pytgcalls.types import MediaStream, AudioQuality, GroupCallConfig, VideoQuality
 
 load_dotenv()
 
@@ -66,7 +66,7 @@ async def stream_loop(user, tgcalls):
                 MediaStream(
                     AUDIO_URL,
                     audio_parameters=AudioQuality.HIGH,
-                    video_flags=MediaStream.Flags.IGNORE,
+                    video_parameters=VideoQuality.SD_360p,
                     ffmpeg_parameters="-re -rtbufsize 30M -max_delay 30000000",
                 ),
                 config=GroupCallConfig(join_as=peer),

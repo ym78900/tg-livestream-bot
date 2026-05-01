@@ -1,6 +1,7 @@
 import asyncio
 import os
 import subprocess
+import traceback
 from dotenv import load_dotenv
 from hydrogram import Client
 from hydrogram.raw.functions.phone import CreateGroupCall, DiscardGroupCall, ToggleGroupCallSettings
@@ -20,36 +21,41 @@ PHONE      = os.getenv("PHONE")
 # Use 240p chunklist directly
 STREAM_URL = HLS_URL.replace("index.m3u8", "chunklist_b341000.m3u8") if "index.m3u8" in HLS_URL else HLS_URL
 
-AUDIO_PIPE = "/tmp/tg_audio.pipe"
-VIDEO_PIPE = "/tmp/tg_video.pipe"
+STREAM_PIPE = "/tmp/tg_stream.pipe"
 
 ffmpeg_proc: subprocess.Popen = None
 
+_pipe_fds = []
+
 
 def create_pipes():
-    for pipe in (AUDIO_PIPE, VIDEO_PIPE):
-        if os.path.exists(pipe):
-            os.remove(pipe)
-        os.mkfifo(pipe)
+    global _pipe_fds
+    for fd in _pipe_fds:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+    _pipe_fds = []
+    if os.path.exists(STREAM_PIPE):
+        os.remove(STREAM_PIPE)
+    os.mkfifo(STREAM_PIPE)
+    fd = os.open(STREAM_PIPE, os.O_RDWR)
+    _pipe_fds.append(fd)
 
 
 def start_ffmpeg():
     global ffmpeg_proc
     cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "warning",
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
         "-rtbufsize", "30M",
         "-i", STREAM_URL,
-        # audio → raw PCM
-        "-map", "0:a",
-        "-f", "s16le", "-ac", "2", "-ar", "48000",
-        AUDIO_PIPE,
-        # video → raw YUV420p
-        "-map", "0:v",
-        "-f", "rawvideo", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
         "-vf", "scale=640:360", "-r", "30",
-        VIDEO_PIPE,
+        "-b:v", "300k",
+        "-c:a", "aac", "-b:a", "96k", "-ar", "48000", "-ac", "2",
+        "-f", "mpegts", STREAM_PIPE,
     ]
-    print("[ffmpeg] Starting single A/V process...")
+    print("[ffmpeg] Starting single A/V process (MPEGTS → pipe)...")
     ffmpeg_proc = subprocess.Popen(cmd)
     return ffmpeg_proc
 
@@ -88,11 +94,13 @@ async def ensure_voice_chat(user, peer):
 async def stream_loop(user, tgcalls):
     global ffmpeg_proc
     peer = await user.resolve_peer(CHANNEL_ID)
-    create_pipes()
 
     while True:
         try:
             await ensure_voice_chat(user, peer)
+
+            # Recreate FIFOs fresh on every attempt
+            create_pipes()
 
             # Start single ffmpeg process for synced A/V
             ffmpeg_proc = start_ffmpeg()
@@ -101,8 +109,7 @@ async def stream_loop(user, tgcalls):
             await tgcalls.play(
                 CHANNEL_ID,
                 MediaStream(
-                    VIDEO_PIPE,
-                    audio_path=AUDIO_PIPE,
+                    STREAM_PIPE,
                     audio_parameters=AudioQuality.HIGH,
                     video_parameters=VideoQuality.SD_360p,
                 ),
@@ -116,7 +123,9 @@ async def stream_loop(user, tgcalls):
             print("[stream] Stream ended. Restarting in 5s...")
 
         except Exception as e:
-            print(f"[stream] Error: {e}. Retrying in 10s...")
+            print(f"[stream] Error: {e}")
+            traceback.print_exc()
+            print("[stream] Retrying in 10s...")
             try:
                 await tgcalls.leave_call(CHANNEL_ID)
             except Exception:

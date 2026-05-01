@@ -27,16 +27,12 @@ async def ensure_voice_chat(user, peer):
     existing_call = chat.full_chat.call
 
     if existing_call:
-        print("[call] Voice chat already exists, reusing.")
-        try:
-            await user.invoke(ToggleGroupCallSettings(
-                call=existing_call,
-                reset_invite_hash=False,
-                join_muted=True,
-            ))
-        except Exception:
-            pass  # already muted or not modified
-        return
+        # Discard it — could be a leftover RTMP stream
+        print("[call] Discarding existing call to create fresh voice chat...")
+        await user.invoke(DiscardGroupCall(
+            call=InputGroupCall(id=existing_call.id, access_hash=existing_call.access_hash)
+        ))
+        await asyncio.sleep(2)
 
     print("[call] Creating voice chat...")
     await user.invoke(CreateGroupCall(
@@ -46,11 +42,14 @@ async def ensure_voice_chat(user, peer):
     ))
     # Lock the mic — no one can speak or request to speak
     chat = await user.invoke(GetFullChannel(channel=peer))
-    await user.invoke(ToggleGroupCallSettings(
-        call=chat.full_chat.call,
-        reset_invite_hash=False,
-        join_muted=True,
-    ))
+    try:
+        await user.invoke(ToggleGroupCallSettings(
+            call=chat.full_chat.call,
+            reset_invite_hash=False,
+            join_muted=True,
+        ))
+    except Exception:
+        pass
     print("[call] Voice chat created, all participants muted.")
 
 

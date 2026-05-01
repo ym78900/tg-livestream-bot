@@ -58,55 +58,30 @@ async def get_or_create_rtmp(user, peer) -> tuple[str, str]:
 
 
 def start_ffmpeg(rtmp_url: str, stream_key: str):
-    """Launch yt-dlp (native downloader) piped into ffmpeg → Telegram RTMP."""
+    """Launch ffmpeg reading directly from HLS URL → Telegram RTMP."""
     global ffmpeg_proc
     dest = f"{rtmp_url}{stream_key}"
-    ytdlp = os.path.join(os.path.dirname(os.sys.executable), "yt-dlp")
-    cookies = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 
-    ytdlp_cmd = [
-        ytdlp,
-        "-f", "96",                    # single combined HLS stream, no merging
-        "--downloader", "native",       # Python downloader — solves n-challenge per segment
-        "--no-warnings",
-        "--cookies", cookies,
-        "-o", "-",                      # pipe raw TS bytes to stdout
-        YT_URL,
-    ]
     ffmpeg_cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "warning",
         "-fflags", "nobuffer",
         "-flags", "low_delay",
-        "-i", "pipe:0",
-        "-copyts", "-start_at_zero",
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-tune", "zerolatency",
-        "-profile:v", "baseline",
-        "-level", "3.1",
-        "-b:v", "10k", "-maxrate", "10k", "-bufsize", "5k",
-        "-r", "1", "-g", "1",
-        "-s", "128x72",
-        "-vf", "geq=0:128:128",
-        "-c:a", "aac", "-b:a", "64k", "-ar", "44100", "-ac", "2",
+        "-i", YT_URL,
+        "-c", "copy",
         "-f", "flv", dest,
     ]
 
-    print("[yt-dlp] Starting native HLS download pipe...")
-    ytdlp_proc = subprocess.Popen(ytdlp_cmd, stdout=subprocess.PIPE)
     print("[ffmpeg] Starting push to Telegram RTMP...")
-    ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdin=ytdlp_proc.stdout)
-    ytdlp_proc.stdout.close()
-    return ytdlp_proc, ffmpeg_proc
+    ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
+    return ffmpeg_proc
 
 
 async def stream_loop(user, peer):
     global ffmpeg_proc
     while True:
-        ytdlp_proc = None
         try:
             rtmp_url, stream_key = await get_or_create_rtmp(user, peer)
-            ytdlp_proc, ffmpeg_proc = start_ffmpeg(rtmp_url, stream_key)
+            ffmpeg_proc = start_ffmpeg(rtmp_url, stream_key)
             print("[stream] Stream is live. Watching ffmpeg process...")
             while ffmpeg_proc.poll() is None:
                 await asyncio.sleep(5)
@@ -116,8 +91,6 @@ async def stream_loop(user, peer):
             await asyncio.sleep(10)
             continue
         finally:
-            if ytdlp_proc and ytdlp_proc.poll() is None:
-                ytdlp_proc.terminate()
             if ffmpeg_proc and ffmpeg_proc.poll() is None:
                 ffmpeg_proc.terminate()
         await asyncio.sleep(5)

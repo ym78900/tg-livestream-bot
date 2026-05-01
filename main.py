@@ -1,10 +1,9 @@
 import asyncio
 import os
-import subprocess
 import traceback
 from dotenv import load_dotenv
 from hydrogram import Client
-from hydrogram.raw.functions.phone import CreateGroupCall, DiscardGroupCall, ToggleGroupCallSettings
+from hydrogram.raw.functions.phone import CreateGroupCall, DiscardGroupCall, ToggleGroupCallSettings, EditGroupCallParticipant
 from hydrogram.raw.functions.channels import GetFullChannel
 from hydrogram.raw.types import InputGroupCall
 from pytgcalls import PyTgCalls
@@ -20,44 +19,6 @@ PHONE      = os.getenv("PHONE")
 
 # Use 240p chunklist directly
 STREAM_URL = HLS_URL.replace("index.m3u8", "chunklist_b341000.m3u8") if "index.m3u8" in HLS_URL else HLS_URL
-
-STREAM_PIPE = "/tmp/tg_stream.pipe"
-
-ffmpeg_proc: subprocess.Popen = None
-
-_pipe_fds = []
-
-
-def create_pipes():
-    global _pipe_fds
-    for fd in _pipe_fds:
-        try:
-            os.close(fd)
-        except Exception:
-            pass
-    _pipe_fds = []
-    if os.path.exists(STREAM_PIPE):
-        os.remove(STREAM_PIPE)
-    os.mkfifo(STREAM_PIPE)
-    fd = os.open(STREAM_PIPE, os.O_RDWR)
-    _pipe_fds.append(fd)
-
-
-def start_ffmpeg():
-    global ffmpeg_proc
-    cmd = [
-        "ffmpeg", "-y", "-hide_banner", "-loglevel", "warning",
-        "-rtbufsize", "30M",
-        "-i", STREAM_URL,
-        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-        "-vf", "scale=640:360", "-r", "30",
-        "-b:v", "300k",
-        "-c:a", "aac", "-b:a", "96k", "-ar", "48000", "-ac", "2",
-        "-f", "mpegts", STREAM_PIPE,
-    ]
-    print("[ffmpeg] Starting single A/V process (MPEGTS → pipe)...")
-    ffmpeg_proc = subprocess.Popen(cmd)
-    return ffmpeg_proc
 
 
 async def ensure_voice_chat(user, peer):
@@ -92,32 +53,45 @@ async def ensure_voice_chat(user, peer):
 
 
 async def stream_loop(user, tgcalls):
-    global ffmpeg_proc
     peer = await user.resolve_peer(CHANNEL_ID)
 
     while True:
         try:
             await ensure_voice_chat(user, peer)
 
-            # Recreate FIFOs fresh on every attempt
-            create_pipes()
-
-            # Start single ffmpeg process for synced A/V
-            ffmpeg_proc = start_ffmpeg()
-
             print("[stream] Joining voice chat as channel...")
             await tgcalls.play(
                 CHANNEL_ID,
                 MediaStream(
-                    STREAM_PIPE,
+                    STREAM_URL,
                     audio_parameters=AudioQuality.HIGH,
                     video_parameters=VideoQuality.SD_360p,
                 ),
                 config=GroupCallConfig(join_as=peer),
             )
+            # Unmute the channel after joining — join_muted=True applies to all
+            # participants including the broadcaster itself if it joins after the
+            # setting is enabled.
+            chat = await user.invoke(GetFullChannel(channel=peer))
+            try:
+                await user.invoke(EditGroupCallParticipant(
+                    call=chat.full_chat.call,
+                    participant=peer,
+                    muted=False,
+                ))
+                print("[stream] Unmuted channel stream.")
+            except Exception as e:
+                print(f"[stream] Unmute warning: {e}")
             print("[stream] Streaming. Waiting for stream to end...")
 
-            while ffmpeg_proc.poll() is None and CHANNEL_ID in [c for c in await tgcalls.calls]:
+            while CHANNEL_ID in [c for c in await tgcalls.calls]:
+                # Also verify the Telegram call still exists — it can be
+                # dropped externally (e.g. admin ends it), which pytgcalls
+                # won't detect on its own.
+                ch = await user.invoke(GetFullChannel(channel=peer))
+                if ch.full_chat.call is None:
+                    print("[stream] Telegram call was dropped externally. Restarting...")
+                    break
                 await asyncio.sleep(10)
 
             print("[stream] Stream ended. Restarting in 5s...")
@@ -130,9 +104,6 @@ async def stream_loop(user, tgcalls):
                 await tgcalls.leave_call(CHANNEL_ID)
             except Exception:
                 pass
-        finally:
-            if ffmpeg_proc and ffmpeg_proc.poll() is None:
-                ffmpeg_proc.terminate()
 
         await asyncio.sleep(5)
 
@@ -155,8 +126,6 @@ async def main():
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\n[bot] Stopping...")
     finally:
-        if ffmpeg_proc and ffmpeg_proc.poll() is None:
-            ffmpeg_proc.terminate()
         try:
             await tgcalls.leave_call(CHANNEL_ID)
         except Exception:

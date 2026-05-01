@@ -6,7 +6,7 @@ from hydrogram.raw.functions.phone import CreateGroupCall, DiscardGroupCall, Tog
 from hydrogram.raw.functions.channels import GetFullChannel
 from hydrogram.raw.types import InputGroupCall
 from pytgcalls import PyTgCalls
-from pytgcalls.types import MediaStream, AudioQuality
+from pytgcalls.types import MediaStream, AudioQuality, GroupCallConfig
 
 load_dotenv()
 
@@ -60,7 +60,7 @@ async def stream_loop(user, tgcalls):
         try:
             await ensure_voice_chat(user, peer)
 
-            print("[stream] Joining voice chat with audio stream...")
+            print("[stream] Joining voice chat as channel...")
             await tgcalls.play(
                 CHANNEL_ID,
                 MediaStream(
@@ -69,6 +69,7 @@ async def stream_loop(user, tgcalls):
                     video_flags=MediaStream.Flags.IGNORE,
                     ffmpeg_parameters="-re -rtbufsize 30M -max_delay 30000000",
                 ),
+                config=GroupCallConfig(join_as=peer),
             )
             print("[stream] Streaming. Waiting for stream to end...")
 

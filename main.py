@@ -62,17 +62,24 @@ def start_ffmpeg(rtmp_url: str, stream_key: str):
     global ffmpeg_proc
     dest = f"{rtmp_url}{stream_key}"
 
-    # Use the 720p chunklist directly to avoid master-playlist codec probe warnings
-    hls_url = YT_URL.replace("index.m3u8", "chunklist_b1196000.m3u8") if "index.m3u8" in YT_URL else YT_URL
+    # Use 240p source chunklist directly
+    hls_url = YT_URL.replace("index.m3u8", "chunklist_b341000.m3u8") if "index.m3u8" in YT_URL else YT_URL
 
     ffmpeg_cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "warning",
         "-analyzeduration", "3000000",
         "-probesize", "5000000",
-        "-fflags", "nobuffer",
-        "-flags", "low_delay",
+        "-fflags", "nobuffer+genpts",
         "-i", hls_url,
-        "-c", "copy",
+        # video: re-encode at 200kbps 240p to fix timestamps
+        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+        "-b:v", "200k", "-maxrate", "250k", "-bufsize", "500k",
+        "-g", "60", "-keyint_min", "60",
+        "-vf", "scale=426:240",
+        # audio: re-encode to fix sync drift
+        "-c:a", "aac", "-b:a", "64k", "-ar", "44100", "-ac", "2",
+        "-af", "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
+        # output
         "-f", "flv", dest,
     ]
 

@@ -67,7 +67,7 @@ async def stream_loop(user, tgcalls):
                     AUDIO_URL,
                     audio_parameters=AudioQuality.HIGH,
                     video_parameters=VideoQuality.SD_360p,
-                    ffmpeg_parameters="-re -rtbufsize 30M -max_delay 30000000",
+                    ffmpeg_parameters="-rtbufsize 30M",
                 ),
                 config=GroupCallConfig(join_as=peer),
             )

@@ -62,11 +62,16 @@ def start_ffmpeg(rtmp_url: str, stream_key: str):
     global ffmpeg_proc
     dest = f"{rtmp_url}{stream_key}"
 
+    # Use the 720p chunklist directly to avoid master-playlist codec probe warnings
+    hls_url = YT_URL.replace("index.m3u8", "chunklist_b1196000.m3u8") if "index.m3u8" in YT_URL else YT_URL
+
     ffmpeg_cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "warning",
+        "-analyzeduration", "3000000",
+        "-probesize", "5000000",
         "-fflags", "nobuffer",
         "-flags", "low_delay",
-        "-i", YT_URL,
+        "-i", hls_url,
         "-c", "copy",
         "-f", "flv", dest,
     ]

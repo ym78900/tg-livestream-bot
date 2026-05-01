@@ -1,5 +1,6 @@
 import asyncio
 import os
+import subprocess
 from dotenv import load_dotenv
 from hydrogram import Client
 from hydrogram.raw.functions.phone import CreateGroupCall, DiscardGroupCall, ToggleGroupCallSettings
@@ -16,8 +17,40 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 HLS_URL    = os.getenv("HLS_URL")
 PHONE      = os.getenv("PHONE")
 
-# Use 240p audio track directly
-AUDIO_URL = HLS_URL.replace("index.m3u8", "chunklist_b341000.m3u8") if "index.m3u8" in HLS_URL else HLS_URL
+# Use 240p chunklist directly
+STREAM_URL = HLS_URL.replace("index.m3u8", "chunklist_b341000.m3u8") if "index.m3u8" in HLS_URL else HLS_URL
+
+AUDIO_PIPE = "/tmp/tg_audio.pipe"
+VIDEO_PIPE = "/tmp/tg_video.pipe"
+
+ffmpeg_proc: subprocess.Popen = None
+
+
+def create_pipes():
+    for pipe in (AUDIO_PIPE, VIDEO_PIPE):
+        if not os.path.exists(pipe):
+            os.mkfifo(pipe)
+
+
+def start_ffmpeg():
+    global ffmpeg_proc
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "warning",
+        "-rtbufsize", "30M",
+        "-i", STREAM_URL,
+        # audio → raw PCM
+        "-map", "0:a",
+        "-f", "s16le", "-ac", "2", "-ar", "48000",
+        AUDIO_PIPE,
+        # video → raw YUV420p
+        "-map", "0:v",
+        "-f", "rawvideo", "-pix_fmt", "yuv420p",
+        "-vf", "scale=640:360", "-r", "30",
+        VIDEO_PIPE,
+    ]
+    print("[ffmpeg] Starting single A/V process...")
+    ffmpeg_proc = subprocess.Popen(cmd)
+    return ffmpeg_proc
 
 
 async def ensure_voice_chat(user, peer):
@@ -27,7 +60,6 @@ async def ensure_voice_chat(user, peer):
     existing_call = chat.full_chat.call
 
     if existing_call:
-        # Discard it — could be a leftover RTMP stream
         print("[call] Discarding existing call to create fresh voice chat...")
         await user.invoke(DiscardGroupCall(
             call=InputGroupCall(id=existing_call.id, access_hash=existing_call.access_hash)
@@ -40,7 +72,6 @@ async def ensure_voice_chat(user, peer):
         random_id=randint(1, 2**31 - 1),
         title="Radio",
     ))
-    # Lock the mic — no one can speak or request to speak
     chat = await user.invoke(GetFullChannel(channel=peer))
     try:
         await user.invoke(ToggleGroupCallSettings(
@@ -54,27 +85,31 @@ async def ensure_voice_chat(user, peer):
 
 
 async def stream_loop(user, tgcalls):
+    global ffmpeg_proc
     peer = await user.resolve_peer(CHANNEL_ID)
+    create_pipes()
 
     while True:
         try:
             await ensure_voice_chat(user, peer)
 
+            # Start single ffmpeg process for synced A/V
+            ffmpeg_proc = start_ffmpeg()
+
             print("[stream] Joining voice chat as channel...")
             await tgcalls.play(
                 CHANNEL_ID,
                 MediaStream(
-                    AUDIO_URL,
+                    VIDEO_PIPE,
+                    audio_path=AUDIO_PIPE,
                     audio_parameters=AudioQuality.HIGH,
                     video_parameters=VideoQuality.SD_360p,
-                    ffmpeg_parameters="-rtbufsize 30M",
                 ),
                 config=GroupCallConfig(join_as=peer),
             )
             print("[stream] Streaming. Waiting for stream to end...")
 
-            # Wait until the stream ends or errors
-            while CHANNEL_ID in [c for c in await tgcalls.calls]:
+            while ffmpeg_proc.poll() is None and CHANNEL_ID in [c for c in await tgcalls.calls]:
                 await asyncio.sleep(10)
 
             print("[stream] Stream ended. Restarting in 5s...")
@@ -85,8 +120,11 @@ async def stream_loop(user, tgcalls):
                 await tgcalls.leave_call(CHANNEL_ID)
             except Exception:
                 pass
+        finally:
+            if ffmpeg_proc and ffmpeg_proc.poll() is None:
+                ffmpeg_proc.terminate()
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(5)
 
 
 async def main():
@@ -100,15 +138,17 @@ async def main():
 
     chat = await user.get_chat(CHANNEL_ID)
     print(f"[bot] Channel: {chat.title} ({CHANNEL_ID})")
-    print("[bot] Starting 24/7 audio stream...")
+    print("[bot] Starting 24/7 A/V stream...")
 
     try:
         await stream_loop(user, tgcalls)
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\n[bot] Stopping...")
     finally:
+        if ffmpeg_proc and ffmpeg_proc.poll() is None:
+            ffmpeg_proc.terminate()
         try:
-            await tgcalls.leave_group_call(CHANNEL_ID)
+            await tgcalls.leave_call(CHANNEL_ID)
         except Exception:
             pass
         await user.stop()

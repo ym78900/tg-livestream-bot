@@ -83,17 +83,23 @@ async def stream_loop(user, tgcalls):
                 print("[stream] Unmuted channel stream.")
             except Exception as e:
                 print(f"[stream] Unmute warning: {e}")
-            print("[stream] Streaming. Waiting for stream to end...")
+            print("[stream] Streaming. Monitoring...")
 
+            consecutive_failures = 0
             while CHANNEL_ID in [c for c in await tgcalls.calls]:
-                # Also verify the Telegram call still exists — it can be
-                # dropped externally (e.g. admin ends it), which pytgcalls
-                # won't detect on its own.
-                ch = await user.invoke(GetFullChannel(channel=peer))
-                if ch.full_chat.call is None:
-                    print("[stream] Telegram call was dropped externally. Restarting...")
-                    break
-                await asyncio.sleep(10)
+                await asyncio.sleep(30)
+                try:
+                    ch = await user.invoke(GetFullChannel(channel=peer))
+                    consecutive_failures = 0
+                    if ch.full_chat.call is None:
+                        print("[stream] Telegram call dropped externally. Restarting...")
+                        break
+                except Exception as e:
+                    consecutive_failures += 1
+                    print(f"[stream] Monitor warning ({consecutive_failures}/3): {e}")
+                    if consecutive_failures >= 3:
+                        print("[stream] 3 consecutive monitor failures. Restarting...")
+                        break
 
             print("[stream] Stream ended. Restarting in 5s...")
 

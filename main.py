@@ -8,6 +8,7 @@ from hydrogram.raw.functions.channels import GetFullChannel
 from hydrogram.raw.types import InputGroupCall
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream, AudioQuality, GroupCallConfig, VideoQuality
+from pytgcalls.types.raw import VideoParameters
 
 load_dotenv()
 
@@ -38,7 +39,7 @@ async def ensure_voice_chat(user, peer):
     await user.invoke(CreateGroupCall(
         peer=peer,
         random_id=randint(1, 2**31 - 1),
-        title="Radio",
+        title="IranIntlLive",
     ))
     chat = await user.invoke(GetFullChannel(channel=peer))
     try:
@@ -66,7 +67,8 @@ async def stream_loop(user, tgcalls):
                 MediaStream(
                     STREAM_URL,
                     audio_parameters=AudioQuality.HIGH,
-                    video_parameters=VideoQuality.SD_360p,
+                    video_parameters=VideoParameters(426, 240, 15),
+                    ffmpeg_parameters="--video ---start -itsoffset 0.04",
                 ),
                 config=GroupCallConfig(join_as=peer),
             )

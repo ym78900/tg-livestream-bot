@@ -54,6 +54,35 @@ async def ensure_voice_chat(user, peer):
     print("[call] Voice chat created, all participants muted.")
 
 
+NOTIFY_USER_ID = int(os.getenv("NOTIFY_USER_ID", "73875473"))
+
+
+async def notify(user, text):
+    """Send an alert to the owner's private Telegram."""
+    try:
+        await user.send_message(NOTIFY_USER_ID, text)
+    except Exception as e:
+        print(f"[notify] Failed to send alert: {e}")
+
+
+
+async def reconnect(user, tgcalls):
+    """Reconnect the hydrogram MTProto session and pytgcalls."""
+    print("[bot] Reconnecting MTProto session...")
+    try:
+        await tgcalls.leave_call(CHANNEL_ID)
+    except Exception:
+        pass
+    try:
+        await user.stop()
+    except Exception:
+        pass
+    await asyncio.sleep(5)
+    await user.start()
+    await tgcalls.start()
+    print("[bot] Reconnected.")
+
+
 async def stream_loop(user, tgcalls):
     peer = await user.resolve_peer(CHANNEL_ID)
 
@@ -101,14 +130,36 @@ async def stream_loop(user, tgcalls):
                     print(f"[stream] Monitor warning ({consecutive_failures}/3): {e}")
                     if consecutive_failures >= 3:
                         print("[stream] 3 consecutive monitor failures. Restarting...")
+                        await notify(user, "⚠️ [tg-stream] 3 consecutive monitor failures — restarting stream")
                         break
 
             print("[stream] Stream ended. Restarting in 5s...")
+
+        except AttributeError as e:
+            # hydrogram connection dropped (protocol is None) — reconnect the session
+            if "NoneType" in str(e) and "send" in str(e):
+                print(f"[bot] MTProto connection lost — reconnecting...")
+                await notify(user, "⚠️ [tg-stream] MTProto connection lost — reconnecting...")
+                try:
+                    await reconnect(user, tgcalls)
+                    peer = await user.resolve_peer(CHANNEL_ID)
+                    await notify(user, "✅ [tg-stream] Reconnected successfully")
+                except Exception as re:
+                    print(f"[bot] Reconnect failed: {re} — retrying in 15s...")
+                    await notify(user, f"❌ [tg-stream] Reconnect failed: {re}")
+                    await asyncio.sleep(15)
+            else:
+                print(f"[stream] Error: {e}")
+                traceback.print_exc()
+                await notify(user, f"❌ [tg-stream] Error: {e}")
+                await asyncio.sleep(10)
+            continue
 
         except Exception as e:
             print(f"[stream] Error: {e}")
             traceback.print_exc()
             print("[stream] Retrying in 10s...")
+            await notify(user, f"❌ [tg-stream] Error: {e}")
             try:
                 await tgcalls.leave_call(CHANNEL_ID)
             except Exception:
